@@ -1,0 +1,723 @@
+#!/usr/bin/env python3
+"""GEARLINE asset generator: tiles, font, strings, music, palettes -> build/"""
+import re, os, sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "build")
+os.makedirs(OUT, exist_ok=True)
+
+# ---------------------------------------------------------------- font source
+_src = open(os.path.join(ROOT, "third_party/misaki/misakiUTF16FontData.h"), encoding="utf-8").read()
+
+
+def _arr(name):
+    i = _src.rindex(name)
+    j = _src.index("{", i)
+    k = _src.index("};", j)
+    return [int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]+)", _src[j:k])]
+
+
+FCODES = _arr("ftable")
+FDATA = _arr("fdata[]")
+
+CUSTOM = {
+    " ": [0] * 8,
+    "▶": [0x00, 0x40, 0x60, 0x70, 0x60, 0x40, 0x00, 0x00],
+    "-": [0x00, 0x00, 0x00, 0x7C, 0x00, 0x00, 0x00, 0x00],
+}
+
+
+def glyph_rows(ch):
+    if ch in CUSTOM:
+        return CUSTOM[ch]
+    c = ord(ch)
+    if 0x21 <= c <= 0x7E:
+        c += 0xFEE0  # to full width
+    if c not in FCODES:
+        raise SystemExit(f"glyph missing in font: {ch!r}")
+    k = FCODES.index(c)
+    return FDATA[k * 7:k * 7 + 7] + [0]
+
+
+# ---------------------------------------------------------------- strings
+S = {}
+BUILD_NAMES = ["ベルト", "マイナー", "かまど", "組立機", "発電機", "分配機", "立体交差", "高速ドリル", "電気かまど", "ハブ"]
+ITEM_NAMES = ["鉄鉱石", "銅鉱石", "石炭", "石", "鉄板", "銅板", "レンガ", "歯車", "銅線", "回路",
+              "鋼材", "エンジン", "フレーム", "電子頭脳", "ロケット部品"]
+for i, n in enumerate(BUILD_NAMES):
+    S[f"BN{i+1}"] = n
+for i, n in enumerate(ITEM_NAMES):
+    S[f"IN{i+1}"] = n
+
+S.update({
+    "TerrTree": "木", "TerrWater": "水",
+    "NoRecipe": "レシピなし",
+    "MsgNoMat": "ざいりょうが たりません",
+    "MsgNoPlace": "ここには おけません",
+    "MsgNeedOre": "鉱石の上に おいてください",
+    "MsgSaved": "セーブしました",
+    "MsgNoRemove": "ハブは こわせません",
+    "MsgGoalReady": "目標の品が そろった!",
+    "MenuTitle": "メニュー",
+    "MenuGoal": "目標を見る", "MenuStock": "ざいこを見る", "MenuSave": "セーブする",
+    "MenuBgmOn": "おんがく ON", "MenuBgmOff": "おんがく OFF", "MenuHelp": "あそびかた",
+    "Hint": "A:けってい B:もどる",
+    "HintBack": "B:もどる",
+    "HintHelp": "A:つぎへ  B:もどる",
+    "GoalHead": "目標", "GoalOf": "/10",
+    "Reward": "ほうしゅう",
+    "GoalDeliver": "A:のうひんする!",
+    "GoalWait": "ハブに品物を とどけよう",
+    "PlayTime": "プレイ時間",
+    "AllDone": "すべての目標を たっせい!",
+    "Cleared": "目標たっせい!",
+    "Next": "A:つぎへ",
+    "StockTitle": "ざいこ",
+    "RecipeTitle": "レシピを えらぶ",
+    "Title1": "- GEARLINE -",
+    "TitleSub": "ちいさな工場ものがたり",
+    "TitleNew": "はじめから", "TitleCont": "つづきから",
+    "Dmg": "このソフトは\n\nゲームボーイカラー\n\nせんようです",
+    "Help1": "【そうさ】\n\n十字キー カーソルいどう\nA  たてる/レシピ\nB  こわす(ざいりょうは\n   もどってきます)\nSELECT むきを かえる\nSTART  メニュー\n\n"
+             "Aを おしたまま うごくと\nベルトを つづけて\nひけます",
+    "Help2": "【工場のきほん】\n\nマイナーを 鉱石の上に\nおくと ほりだします\n\nベルトで かまどへ\nはこぶと 板になります\n\n"
+             "できた品物を まん中の\nハブへ とどけると\nざいこに なります\n\nざいこは たてものの\nざいりょうと 目標の\nのうひんに つかいます",
+    "Help3": "【きかい】\n\nきかいは 黄色いしるしの\n方向へ 品物を 出します\n\nかまどは 石で つくれます\n石も ハブへ とどけよう\n\n"
+             "分配機は 3方向に 分ける\n\n立体交差は ベルトを\n交差させる",
+    "Help4": "【電力】\n\n組立機は 電力が ひつよう\n発電機に 石炭を\nとどけよう\n\n画面下の「電」は\nつかう量/つくる量\n\n"
+             "電力が たりないと\nきかいが おそくなります\n\nきかいに カーソルを\nあわせると 中身が\n見えます",
+    "End": "   ロケット発射!\n\n\nおめでとうございます\n\nあなたの工場は ついに\nロケットを 宇宙へ\nおくりだしました\n\n\n\n\n工場は このまま\nうごかしつづけられます",
+})
+
+GOALS = [
+    # title, reward, [(item, qty)...]
+    ("はじめの いっぽ", "組立機と発電機が\nつくれるように!\n\nレシピ:歯車", [(5, 50), (6, 10)]),
+    ("歯車を まわせ", "分配機と立体交差が\nつくれるように!\n\nレシピ:銅線", [(8, 30), (6, 30), (7, 10)]),
+    ("電気の時代", "レシピ:回路", [(9, 60), (8, 50)]),
+    ("かたい鉄を もとめて", "レシピ:鋼材\n(鉄板と石炭から)", [(10, 40), (7, 40)]),
+    ("工場の高速化", "高速ドリルと\n電気かまどが\nつくれるように!", [(11, 50), (10, 60)]),
+    ("大量生産", "レシピ:エンジン\nレシピ:フレーム", [(11, 100), (8, 150), (9, 150)]),
+    ("うごく きかい", "レシピ:電子頭脳", [(12, 30), (13, 40)]),
+    ("考える きかい", "レシピ:ロケット部品", [(14, 40), (12, 60)]),
+    ("発射台を つくれ", "発射台が できた!\nさいごの目標へ", [(15, 30), (13, 100)]),
+    ("宇宙へ!", "ロケット発射!", [(15, 100), (11, 300), (10, 300)]),
+]
+for i, (t, r, _) in enumerate(GOALS):
+    S[f"G{i+1}T"] = t
+    S[f"G{i+1}R"] = r
+
+for k, v in S.items():
+    for line in v.split("\n"):
+        if len(line) > 20:
+            raise SystemExit(f"string {k} line too long ({len(line)}): {line}")
+
+# glyph allocation: 0 = space, 1..10 = digits
+glyphs = [" "] + list("0123456789")
+NAMED = {"CURSOR": "▶", "COLON": ":", "SLASH": "/", "EXCL": "!", "MARU": "○", "BATSU": "×",
+         "DEN": "電", "LARROW": "←", "PLUS": "+"}
+for ch in NAMED.values():
+    if ch not in glyphs:
+        glyphs.append(ch)
+for v in S.values():
+    for ch in v:
+        if ch != "\n" and ch not in glyphs:
+            glyphs.append(ch)
+if len(glyphs) > 254:
+    raise SystemExit(f"too many glyphs: {len(glyphs)}")
+
+font = bytearray()
+for ch in glyphs:
+    for r in glyph_rows(ch):
+        font += bytes([r, r])  # colour 3
+font += bytes(16 * (256 - len(glyphs)))
+open(os.path.join(OUT, "font.bin"), "wb").write(font)
+
+with open(os.path.join(OUT, "strings.inc"), "w", encoding="utf-8") as f:
+    f.write("; generated by tools/gen.py\n")
+    f.write("DEF GLY_0 EQU 1\n")
+    for name, ch in NAMED.items():
+        f.write(f"DEF GLY_{name} EQU {glyphs.index(ch)}\n")
+    for k, v in S.items():
+        bs = []
+        for ch in v:
+            bs.append(0xFE if ch == "\n" else glyphs.index(ch))
+        bs.append(0xFF)
+        f.write(f"Str_{k}:: db " + ",".join(f"${b:02X}" for b in bs) + f" ; {v!r}\n")
+    f.write("GoalTab::\n")
+    for i, (t, r, req) in enumerate(GOALS):
+        req = req + [(0, 0)] * (3 - len(req))
+        for it, q in req:
+            f.write(f"  db {it}\n  dw {q}\n")
+        f.write(f"  dw Str_G{i+1}T, Str_G{i+1}R\n  ds 3\n")
+    f.write(f"DEF NUM_GOALS EQU {len(GOALS)}\n")
+
+# ---------------------------------------------------------------- tiles
+tiles = []      # list of 8x8 int matrices
+attrs = []
+consts = {}
+
+
+def T(art):
+    rows = [r.strip() for r in art.strip().split("\n")]
+    assert len(rows) == 8 and all(len(r) == 8 for r in rows), art
+    return [[0 if c == "." else int(c) for c in r] for r in rows]
+
+
+def rot(t):  # clockwise
+    return [[t[7 - x][y] for x in range(8)] for y in range(8)]
+
+
+def add(name, t, pal):
+    if name:
+        consts[name] = len(tiles)
+    tiles.append(t)
+    attrs.append(pal)
+
+
+def enc(t):
+    b = bytearray()
+    for r in t:
+        lo = hi = 0
+        for x in range(8):
+            lo |= (r[x] & 1) << (7 - x)
+            hi |= (r[x] >> 1) << (7 - x)
+        b += bytes([lo, hi])
+    return b
+
+
+add("T_BLANK", [[0] * 8 for _ in range(8)], 3)
+
+# --- terrain: grass, grass2, flower, tree, water, iron, copper, coal, stone
+add("T_TERR", T("""
+........
+..1.....
+........
+.....1..
+........
+.1......
+......1.
+........"""), 0)
+add(None, T("""
+........
+......1.
+.1......
+........
+...1....
+........
+1....1..
+........"""), 0)
+add(None, T("""
+........
+...3....
+..313...
+...3....
+...2....
+.....3..
+....313.
+.....3.."""), 0)
+add(None, T("""
+..2222..
+.221122.
+22111122
+21111112
+22111122
+.222222.
+...22...
+..2222.."""), 0)
+add(None, T("""
+11111111
+11211111
+12121112
+11111121
+11111111
+11112111
+21121211
+11111111"""), 7)
+add(None, T("""
+..11....
+.1231...
+.1221.11
+..11.123
+.....122
+.11...11
+1231....
+.11....."""), 1)
+add(None, T("""
+.....11.
+....1231
+.11..121
+1231..1.
+1221....
+.11..11.
+....1231
+.....11."""), 2)
+add(None, T("""
+.....11.
+.11.1121
+11211111
+1111.11.
+.11.....
+....11..
+...1121.
+....111."""), 1)
+add(None, T("""
+........
+..111...
+.13331..
+1333231.
+1332221.
+.12221..
+..111.11
+.....132"""), 1)
+
+# --- belts (N,E,S,W) + animation frames
+BELT_P = [[1, 0, 0, 3, 3, 0, 0, 1],
+          [1, 0, 3, 0, 0, 3, 0, 1],
+          [1, 3, 0, 0, 0, 0, 3, 1],
+          [1, 0, 0, 0, 0, 0, 0, 1]]
+
+
+def belt_frame(k, d):
+    t = [BELT_P[(r + k) % 4][:] for r in range(8)]
+    for _ in range(d):
+        t = rot(t)
+    return t
+
+
+for d in range(4):
+    add("T_BELT" if d == 0 else None, belt_frame(0, d), 3)
+anim = bytearray()
+for k in range(4):
+    for d in range(4):
+        anim += enc(belt_frame(k, d))
+open(os.path.join(OUT, "beltanim.bin"), "wb").write(anim)
+
+# --- item icons (6x6)
+def I(art):
+    rows = [r.strip() for r in art.strip().split("\n")]
+    assert len(rows) == 6 and all(len(r) == 6 for r in rows), art
+    return [[0 if c == "." else int(c) for c in r] for r in rows]
+
+
+ICONS = [
+    (I("""
+..11..
+.1211.
+112111
+111121
+.1111.
+..11.."""), 3),   # iron ore
+    (I("""
+..22..
+.2322.
+223221
+222211
+.2211.
+..11.."""), 4),   # copper ore
+    (I("""
+.11...
+1121.1
+111111
+.11121
+..1111
+...11."""), 7),   # coal
+    (I("""
+......
+.2221.
+222211
+222111
+.1111.
+......"""), 3),   # stone
+    (I("""
+......
+.22222
+222221
+222221
+11111.
+......"""), 3),   # iron plate
+    (I("""
+......
+.22222
+223221
+222221
+11111.
+......"""), 4),   # copper plate
+    (I("""
+......
+222122
+222122
+111111
+212221
+212221"""), 4),   # brick
+    (I("""
+1.22.1
+.2222.
+22..22
+22..22
+.2222.
+1.22.1"""), 3),   # gear
+    (I("""
+111111
+.2323.
+.3232.
+.2323.
+.3232.
+111111"""), 4),   # wire
+    (I("""
+222222
+211232
+211222
+222322
+232112
+222222"""), 6),   # circuit
+    (I("""
+222222
+.1221.
+..22..
+..22..
+.1221.
+222222"""), 3),   # steel
+    (I("""
+.1111.
+131131
+122221
+122221
+133331
+.1..1."""), 3),   # engine
+    (I("""
+333333
+31..13
+3.11.3
+3.11.3
+31..13
+333333"""), 3),   # frame
+    (I("""
+3.3.3.
+.1111.
+31331.
+.13313
+.1111.
+.3.3.3"""), 6),   # brain
+    (I("""
+..33..
+.3223.
+.3113.
+.3223.
+332233
+3.11.3"""), 7),   # rocket part
+]
+for n, (ic, pal) in enumerate(ICONS):
+    base = [[0] * 8 for _ in range(8)]
+    for r in range(8):
+        base[r][0] = base[r][7] = 1
+    base[0][3] = base[0][4] = 3
+    base[7][2] = base[7][5] = 3
+    for d in range(4):
+        t = [row[:] for row in base]
+        for _ in range(d):
+            t = rot(t)
+        for y in range(6):
+            for x in range(6):
+                t[y + 1][x + 1] = ic[y][x]
+        add("T_ITEMB" if (n == 0 and d == 0) else None, t, pal)
+for n, (ic, pal) in enumerate(ICONS):
+    t = [[0] * 8 for _ in range(8)]
+    for y in range(6):
+        for x in range(6):
+            t[y + 1][x + 1] = ic[y][x]
+    add("T_ICON" if n == 0 else None, t, pal)
+
+
+# --- machines
+def S4(art):
+    rows = [r.strip() for r in art.strip().split("\n")]
+    assert len(rows) == 4 and all(len(r) == 4 for r in rows), art
+    return [[0 if c == "." else int(c) for c in r] for r in rows]
+
+
+def body(border, ring, sym):
+    t = [[ring] * 8 for _ in range(8)]
+    for i in range(8):
+        t[0][i] = t[7][i] = t[i][0] = t[i][7] = border
+    for y in range(4):
+        for x in range(4):
+            t[y + 2][x + 2] = sym[y][x] if sym[y][x] else (0 if ring == 0 else 0)
+    return t
+
+
+def notch(t, d, col=3):
+    t = [r[:] for r in t]
+    pts = {0: [(0, 3), (0, 4), (1, 3), (1, 4)], 1: [(3, 7), (4, 7), (3, 6), (4, 6)],
+           2: [(7, 3), (7, 4), (6, 3), (6, 4)], 3: [(3, 0), (4, 0), (3, 1), (4, 1)]}[d]
+    for y, x in pts:
+        t[y][x] = col
+    return t
+
+
+def machine(name, idle, active, pal, directional=True):
+    for st, b in enumerate((idle, active)):
+        for d in range(4):
+            add(name if (st == 0 and d == 0) else None, notch(b, d) if directional else b, pal)
+
+
+TRI_I = S4("2222\n2222\n.22.\n.22.")
+TRI_A = S4("2222\n2332\n.33.\n.33.")
+machine("T_MINER", body(1, 0, TRI_I), body(1, 0, TRI_A), 3)
+FL_I = S4("....\n.11.\n1111\n1111")
+FL_A = S4(".3..\n.32.\n2332\n2222")
+machine("T_FURN", body(1, 0, FL_I), body(1, 0, FL_A), 5)
+AS_I = S4(".22.\n2222\n2222\n.22.")
+AS_A = S4("3..3\n.33.\n.33.\n3..3")
+machine("T_ASM", body(1, 0, AS_I), body(1, 0, AS_A), 3)
+BO_I = S4(".22.\n22..\n.22.\n22..")
+BO_A = S4(".33.\n33..\n.33.\n33..")
+machine("T_GEN", body(1, 0, BO_I), body(2, 0, BO_A), 6, directional=False)
+SPL = T("""
+11133111
+1.3333.1
+13333331
+3..33..3
+33.33.33
+3..33..3
+1..33..1
+11111111""")
+for d in range(4):
+    t = SPL
+    for _ in range(d):
+        t = rot(t)
+    add("T_SPLIT" if d == 0 else None, t, 3)
+add("T_CROSS", T("""
+.1.33.1.
+.1....1.
+22222222
+.3.33.3.
+.3.33.3.
+22222222
+.1....1.
+.1.33.1."""), 3)
+TRI2_I = S4("2222\n2222\n.22.\n.22.")
+TRI2_A = S4("3333\n3333\n.33.\n.33.")
+machine("T_DRILL", body(2, 1, TRI2_I), body(2, 1, TRI2_A), 7)
+machine("T_EFURN", body(2, 1, FL_I), body(2, 1, FL_A), 5)
+
+HUB = """
+1111111111111111
+1222222222222221
+12............21
+12.33......33.21
+12.33......33.21
+12.....33.....21
+12....3333....21
+12...333333...21
+12.....33.....21
+12.....33.....21
+12.....33.....21
+12.33......33.21
+12.33......33.21
+12............21
+1222222222222221
+1111111111111111"""
+hrows = [[0 if c == "." else int(c) for c in r.strip()] for r in HUB.strip().split("\n")]
+for q, (oy, ox) in enumerate([(0, 0), (0, 8), (8, 0), (8, 8)]):
+    add("T_HUB" if q == 0 else None, [hrows[oy + y][ox:ox + 8] for y in range(8)], 7)
+
+# --- sprites
+add("T_CURSOR", T("""
+3333....
+3111....
+31......
+31......
+........
+........
+........
+........"""), 0)
+add("T_ARROW_U", T("""
+...33...
+..3333..
+.333333.
+.113311.
+...33...
+...11...
+........
+........"""), 0)
+add("T_ARROW_R", T("""
+........
+..13....
+..133...
+3333331.
+3333331.
+..133...
+..13....
+........"""), 0)
+
+# --- ending rocket (16x16) + flame frames
+ROCKET = """
+.......11.......
+......1221......
+.....122221.....
+.....122221.....
+....12233221....
+....12311321....
+....12311321....
+....12233221....
+....12222221....
+....12222221....
+...1122222211...
+..131222222131..
+.13312222221331.
+.13312222221331.
+.111.111111.111.
+......1111......"""
+rrows = [[0 if c == "." else int(c) for c in r.strip()] for r in ROCKET.strip().split("\n")]
+for q, (oy, ox) in enumerate([(0, 0), (0, 8), (8, 0), (8, 8)]):
+    add("T_ROCKET" if q == 0 else None, [rrows[oy + y][ox:ox + 8] for y in range(8)], 0)
+add("T_FLAME", T("""
+.223322.
+.233332.
+..2332..
+..2332..
+...22...
+...22...
+...1....
+........"""), 0)
+add(None, T("""
+.123321.
+..2332..
+..2332..
+...22...
+...21...
+....1...
+........
+........"""), 0)
+
+# --- logo (2x scaled glyphs with shadow)
+LOGO = "ギアライン"
+W = len(LOGO) * 16
+big = [[0] * W for _ in range(16)]
+for n, ch in enumerate(LOGO):
+    rows = glyph_rows(ch)
+    for y in range(8):
+        for x in range(8):
+            if rows[y] & (0x80 >> x):
+                for dy in range(2):
+                    for dx in range(2):
+                        big[y * 2 + dy][n * 16 + x * 2 + dx] = 3
+for y in range(15, 0, -1):
+    for x in range(W - 1, 0, -1):
+        if big[y][x] == 0 and big[y - 1][x - 1] == 3:
+            big[y][x] = 1
+consts["T_LOGO"] = len(tiles)
+consts["LOGO_W"] = W // 8
+for ty in range(2):
+    for tx in range(W // 8):
+        add(None, [big[ty * 8 + y][tx * 8:tx * 8 + 8] for y in range(8)], 5)
+
+if len(tiles) > 256:
+    raise SystemExit(f"too many tiles: {len(tiles)}")
+data = bytearray()
+for t in tiles:
+    data += enc(t)
+open(os.path.join(OUT, "tiles.bin"), "wb").write(data)
+open(os.path.join(OUT, "tileattr.bin"), "wb").write(bytes(attrs) + bytes(256 - len(attrs)))
+
+# ---------------------------------------------------------------- palettes
+def rgb(h):
+    r, g, b = int(h[1:3], 16) >> 3, int(h[3:5], 16) >> 3, int(h[5:7], 16) >> 3
+    return r | (g << 5) | (b << 10)
+
+
+DARK = "#101020"
+BGPAL = [
+    ["#7ec850", "#5aa838", "#2f7030", "#f8e840"],
+    ["#7ec850", "#181820", "#6878a0", "#d8dce8"],
+    ["#7ec850", "#5a3018", "#d87830", "#f8c070"],
+    [DARK, "#707888", "#f0f0f0", "#f8d030"],
+    [DARK, "#7a4020", "#e08030", "#f8e0a0"],
+    [DARK, "#902018", "#f07020", "#f8e040"],
+    [DARK, "#186838", "#40d060", "#c0f8f0"],
+    [DARK, "#3060c0", "#90b0f0", "#ffffff"],
+]
+OBJPAL = [
+    ["#000000", "#101020", "#ffffff", "#f8d030"],
+    ["#000000", "#101020", "#ffffff", "#ffffff"],
+    ["#000000", "#101020", "#f0f0f0", "#e03030"],
+    ["#000000", "#e03030", "#f88020", "#f8e840"],
+]
+FIRE = [("#f07020", "#f8e040"), ("#f88830", "#f8f070"), ("#e06018", "#f8d030"), ("#f07828", "#f8e850")]
+
+with open(os.path.join(OUT, "gfx.inc"), "w") as f:
+    f.write("; generated by tools/gen.py\n")
+    for k, v in consts.items():
+        f.write(f"DEF {k} EQU {v}\n")
+    f.write(f"DEF NUM_TILES EQU {len(tiles)}\n")
+with open(os.path.join(OUT, "pal.inc"), "w") as f:
+    f.write("BGPalData::\n")
+    for p in BGPAL:
+        f.write("  dw " + ",".join(f"${rgb(c):04X}" for c in p) + "\n")
+    f.write("OBJPalData::\n")
+    for p in OBJPAL:
+        f.write("  dw " + ",".join(f"${rgb(c):04X}" for c in p) + "\n")
+    f.write("FirePal::\n")
+    for a, b in FIRE:
+        f.write(f"  dw ${rgb(a):04X},${rgb(b):04X}\n")
+
+# ---------------------------------------------------------------- music
+NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def note_idx(tok, shift=0):
+    if tok == "-":
+        return 0
+    if tok == ".":
+        return 1
+    name, octv = tok[:-1], int(tok[-1])
+    semis = NOTE_NAMES.index(name) + (octv - 2) * 12 + shift
+    assert 0 <= semis <= 71, tok
+    return semis + 2
+
+
+def pat(text, shift=0):
+    toks = text.split()
+    assert len(toks) == 64, (len(toks), text)
+    return [note_idx(t, shift) for t in toks]
+
+
+def bass(roots):
+    out = []
+    for a, b, c in roots:
+        out += f"{a} - {b} - {c} - {b} - {a} - {b} - {c} - {b} -".split()
+    return pat(" ".join(out), 12)
+
+
+MEL_A = pat("""E5 - G5 - C6 - - - B5 - G5 - E5 - G5 -
+A5 - - - E5 - C5 - E5 - A5 - G5 - E5 -
+F5 - A5 - C6 - - - A5 - F5 - A5 - C6 -
+B5 - - - G5 - D5 - G5 - B5 - D6 - - -""")
+MEL_B = pat("""C6 - B5 - A5 - - - E5 - - - A5 - B5 -
+C6 - - - A5 - F5 - A5 - - - . - - -
+G5 - E5 - G5 - C6 - E6 - D6 - C6 - G5 -
+D6 - - - B5 - G5 - D5 - G5 - B5 - - -""")
+MEL_C = pat("""A5 - - - - - C6 - - - A5 - - - F5 -
+B5 - - - - - D6 - - - B5 - - - G5 -
+G5 - - - B5 - - - E6 - - - D6 - B5 -
+C6 - - - - - - - A5 - - - . - - -""")
+BAS_A = bass([("C3", "G3", "C4"), ("A2", "E3", "A3"), ("F2", "C3", "F3"), ("G2", "D3", "G3")])
+BAS_B = bass([("A2", "E3", "A3"), ("F2", "C3", "F3"), ("C3", "G3", "C4"), ("G2", "D3", "G3")])
+BAS_C = bass([("F2", "C3", "F3"), ("G2", "D3", "G3"), ("E2", "B2", "E3"), ("A2", "E3", "A3")])
+ORDER = ["A", "A", "B", "A", "C", "B"]
+
+with open(os.path.join(OUT, "music.inc"), "w") as f:
+    f.write("NoteFreq::\n  dw 0,0\n")
+    for s in range(72):
+        hz = 65.406 * 2 ** (s / 12)
+        f.write(f"  dw {max(0, min(2047, round(2048 - 131072 / hz)))}\n")
+    for nm, p in (("MelA", MEL_A), ("MelB", MEL_B), ("MelC", MEL_C), ("BasA", BAS_A), ("BasB", BAS_B), ("BasC", BAS_C)):
+        f.write(f"{nm}: db " + ",".join(str(x) for x in p) + "\n")
+    f.write("MusOrder::\n")
+    for o in ORDER:
+        f.write(f"  dw Mel{o}, Bas{o}\n")
+    f.write(f"DEF MUS_ORDER_LEN EQU {len(ORDER)}\n")
+    for nm, tok in (("C6", "C6"), ("E6", "E6"), ("G6", "G6"), ("C7", "C7"), ("G5", "G5"), ("E5", "E5"), ("A5", "A5")):
+        f.write(f"DEF N_{nm} EQU {note_idx(tok)}\n")
+
+print(f"tiles={len(tiles)} glyphs={len(glyphs)}")
