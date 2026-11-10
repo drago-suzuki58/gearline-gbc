@@ -1,0 +1,6 @@
+/build/
+*.gbc
+*.ram
+*.sav
+__pycache__/
+.venv/

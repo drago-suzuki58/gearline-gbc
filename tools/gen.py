@@ -1,13 +1,33 @@
 #!/usr/bin/env python3
 """GEARLINE asset generator: tiles, font, strings, music, palettes -> build/"""
-import re, os, sys
+import re, os, sys, hashlib, urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "build")
 os.makedirs(OUT, exist_ok=True)
 
 # ---------------------------------------------------------------- font source
-_src = open(os.path.join(ROOT, "third_party/misaki/misakiUTF16FontData.h"), encoding="utf-8").read()
+# Misaki font data from Arduino-misakiUTF16 (free to use and redistribute).
+# Not bundled: downloaded once into build/ and verified against a pinned hash.
+FONT_URL = ("https://raw.githubusercontent.com/Tamakichi/Arduino-misakiUTF16/"
+            "d93616a208b66679a13a4a4db4bd00873c40100f/src/misakiUTF16FontData.h")
+FONT_SHA256 = "be3913a8b9ea00535d6ec83213ac7a1a82f8965e875dff9740c8a976a3f66ee0"
+
+
+def _font_source():
+    path = os.path.join(OUT, "misakiUTF16FontData.h")
+    if os.path.exists(path):
+        data = open(path, "rb").read()
+    else:
+        print(f"downloading {FONT_URL}")
+        data = urllib.request.urlopen(FONT_URL, timeout=30).read()
+    if hashlib.sha256(data).hexdigest() != FONT_SHA256:
+        raise SystemExit(f"font data hash mismatch: {path}")
+    open(path, "wb").write(data)
+    return data.decode("utf-8")
+
+
+_src = _font_source()
 
 
 def _arr(name):

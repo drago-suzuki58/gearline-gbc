@@ -1,0 +1,55 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RGBDS_VERSION: v1.0.4
+  RGBDS_SHA256: 3e19e50ea602e316be709160acaf0a708b1fa6d32d219ec541f244442895dbb7
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install RGBDS
+        run: |
+          curl -sSfL -o rgbds.tar.xz "https://github.com/gbdev/rgbds/releases/download/${RGBDS_VERSION}/rgbds-linux-x86_64.tar.xz"
+          echo "${RGBDS_SHA256}  rgbds.tar.xz" | sha256sum -c
+          mkdir -p "$RUNNER_TEMP/rgbds"
+          tar xJf rgbds.tar.xz -C "$RUNNER_TEMP/rgbds"
+          rm rgbds.tar.xz
+          echo "$RUNNER_TEMP/rgbds" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: ./build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gearline
+          path: gearline.gbc
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: gearline
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" gearline.gbc --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
